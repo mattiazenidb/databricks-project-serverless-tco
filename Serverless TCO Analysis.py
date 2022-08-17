@@ -202,18 +202,20 @@ all_warehouses_grouped = all_queries \
 # COMMAND ----------
 
 all_queries_grouped_autostop_with_dbu_classic = all_warehouses_grouped.join(workloads, [workloads.date == all_warehouses_grouped.date, workloads.clusterId == all_warehouses_grouped.clusterID]) \
-         .select(workloads.date, workloads.clusterId, workloads.clusterDriverNodeType, workloads.clusterWorkerNodeType, workloads.clusterWorkers, workloads.etlRegion, all_warehouses_grouped.endpointID, all_warehouses_grouped.queryStartDateTime, all_warehouses_grouped.queryEndDateTime, workloads.nodeHours, workloads.approxDBUs, all_warehouses_grouped.workspaceId) \
+         .select(workloads.date, workloads.clusterId, workloads.clusterDriverNodeType, workloads.clusterWorkerNodeType, workloads.clusterWorkers, workloads.etlRegion, workloads.containerPricingUnits, all_warehouses_grouped.endpointID, all_warehouses_grouped.queryStartDateTime, all_warehouses_grouped.queryEndDateTime, workloads.nodeHours, workloads.approxDBUs, all_warehouses_grouped.workspaceId) \
          .withColumn('queryEndDateTimeWithAutostop', to_timestamp((((unix_timestamp('queryStartDateTime')) + workloads.nodeHours * 60 * 60))))\
-         .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'clusterDriverNodeType', 'clusterWorkerNodeType', 'clusterWorkers', 'etlRegion') \
+         .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'clusterDriverNodeType', 'clusterWorkerNodeType', 'etlRegion') \
          .agg(
             max('queryStartDateTime').alias('queryStartDateTime'),
             max('queryEndDateTime').alias('queryEndDateTime'),
             max('queryEndDateTimeWithAutostop').alias('queryEndDateTimeWithAutostop'),
             max('nodeHours').alias('nodeHours'),
-            sum('approxDBUs').alias('totalDBUs')
+            max('containerPricingUnits').alias('maxContainerPricingUnits'),
+            max('clusterWorkers').alias('maxClusterWorkers')
           ) \
+         .withColumn('totalDBUs', (col('maxContainerPricingUnits') + col('maxClusterWorkers') * 2) * col('nodeHours')) \
          .withColumn('totalDollarDBUs', col('totalDBUs') * costPerDbuClassic) \
-         .withColumn('totalDollarVM', compute_vm_cost('clusterDriverNodeType', 'clusterWorkerNodeType', 'clusterWorkers', 'etlRegion') * col('nodeHours')) \
+         .withColumn('totalDollarVM', compute_vm_cost('clusterDriverNodeType', 'clusterWorkerNodeType', 'maxClusterWorkers', 'etlRegion') * col('nodeHours')) \
          .withColumn('totalDollar', col('totalDollarVM') + col('totalDollarDBUs')) \
          .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
          .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
@@ -309,18 +311,6 @@ visualize_plot(dataframe_serverless)
 # MAGIC %md
 # MAGIC 
 # MAGIC # Debug
-
-# COMMAND ----------
-
-#display(all_queries.filter(col('date') == '2022-07-03').filter(col('endpointID') == 'b3a72e2e92ff9cd9'))
-
-# COMMAND ----------
-
-display(all_queries_grouped_autostop_with_dbu_classic.filter(col('date') == '2022-07-03').filter(col('endpointID') == 'b3a72e2e92ff9cd9'))
-
-# COMMAND ----------
-
-display(all_queries_grouped_autostop_with_dbu_serverless.filter(col('date') == '2022-07-03').filter(col('endpointID') == 'b3a72e2e92ff9cd9'))
 
 # COMMAND ----------
 
@@ -423,7 +413,8 @@ display(all_queries_comparison)
 # MAGIC 
 # MAGIC - Add autoscaling
 # MAGIC - Understand why NoneType can be present in compute_vm_cost
-# MAGIC - Optimize
+# MAGIC - Is cluster restart at midnight an issue?
+# MAGIC - Performance Optimization (disk spill)
 
 # COMMAND ----------
 
