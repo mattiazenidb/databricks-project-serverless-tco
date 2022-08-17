@@ -212,7 +212,8 @@ all_queries_grouped_autostop_with_dbu_classic = all_warehouses_grouped.join(work
          .withColumn('totalDollarVM', compute_vm_cost('clusterDriverNodeType', 'clusterWorkerNodeType', 'clusterWorkers', 'etlRegion') * col('nodeHours')) \
          .withColumn('totalDollar', col('totalDollarVM') + col('totalDollarDBUs')) \
          .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-         .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))).cache()
+         .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
+         .cache()
 
 # COMMAND ----------
 
@@ -261,7 +262,8 @@ all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_
          .withColumn('totalDBUs', col('totalContainerPricingUnits') / (60 * 60) * (unix_timestamp('queryEndDateTimeWithAutostop') - unix_timestamp('queryStartDateTime'))) \
          .withColumn('totalDollarDBUs', col('totalDBUs') * return_serverless_cost('etlRegion')) \
          .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-         .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))).cache()
+         .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
+         .cache()
 
 # COMMAND ----------
 
