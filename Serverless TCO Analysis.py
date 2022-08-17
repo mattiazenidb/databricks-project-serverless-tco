@@ -5,6 +5,12 @@
 
 # COMMAND ----------
 
+spark.conf.set('spark.sql.adaptive.enabled', True)
+spark.conf.set('spark.sql.adaptive.skewJoin.enabled', True)
+#spark.sql.adaptive.forceOptimizeSkewedJoin
+
+# COMMAND ----------
+
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from pyspark.sql.window import Window
@@ -116,7 +122,8 @@ def compute_vm_cost(clusterDriverNodeType, clusterWorkerNodeType, clusterWorkers
     vm_prices_per_region = vm_prices[etlRegion]
     return vm_prices_per_region[clusterDriverNodeType] * (100-vmDiscountPercentage)/100 + vm_prices_per_region[clusterWorkerNodeType] * (100-vmDiscountPercentage)/100 * clusterWorkers
   else:
-    return 0
+    vm_prices_per_region = vm_prices['us-east-1']
+    return vm_prices_per_region[clusterDriverNodeType] * (100-vmDiscountPercentage)/100 + vm_prices_per_region[clusterWorkerNodeType] * (100-vmDiscountPercentage)/100 * clusterWorkers
 
 # COMMAND ----------
 
@@ -157,7 +164,7 @@ cluster_endpoint_mapping = spark.read.table("prod_ds.cluster_endpoint_mapping")
 
 # COMMAND ----------
 
-workspaces = spark.read.table('prod.workspaces').filter(lower(col('canonicalCustomerName')) == customerName.lower())
+workspaces = spark.read.table('prod.workspaces').select('workspaceId', 'canonicalCustomerName').filter(lower(col('canonicalCustomerName')) == customerName.lower())
 
 # COMMAND ----------
 
@@ -173,8 +180,8 @@ workloads = spark.read.table('prod.workloads').select('date', 'approxDBUs', 'nod
 # List of queries for selected customer in selected date range
 
 all_queries = (thrift_statements
-             .join(cluster_endpoint_mapping, [cluster_endpoint_mapping['clusterID'] == thrift_statements['clusterID'], cluster_endpoint_mapping['workspaceId'] == thrift_statements['workspaceId']])
-             .join(workspaces, [cluster_endpoint_mapping['workspaceId'] == workspaces['workspaceId']])
+             .join(cluster_endpoint_mapping.hint("broadcast"), [cluster_endpoint_mapping['clusterID'] == thrift_statements['clusterID'], cluster_endpoint_mapping['workspaceId'] == thrift_statements['workspaceId']])
+             .join(workspaces.hint("broadcast"), [cluster_endpoint_mapping['workspaceId'] == workspaces['workspaceId']])
              .withColumn('queryStartDateTime', to_timestamp((((unix_timestamp('queryEndDateTime') + date_format(col("queryEndDateTime"), "SSS").cast('float') / 1000) * 1000) - thrift_statements['queryDurationSeconds'] * 1000 - thrift_statements['fetchDurationSeconds'] * 1000) / 1000)) \
              .select(thrift_statements['date'], 'queryStartDateTime', thrift_statements['queryEndDateTime'], thrift_statements['workspaceId'], cluster_endpoint_mapping['endpointID'], thrift_statements['clusterID'], thrift_statements['thriftStatementId'], thrift_statements['queryDurationSeconds'], thrift_statements['fetchDurationSeconds'])
              .drop('date')
@@ -319,22 +326,22 @@ visualize_plot(dataframe_serverless)
 
 # COMMAND ----------
 
-display(all_queries)
+#display(all_queries)
 
 # COMMAND ----------
 
+'''
 dataframe_debug = all_queries \
                      .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
                      .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTime', 'HH:mm:ss').cast('string'))) \
                      .withColumn("date", col('queryStartDateTime').cast('date')) \
                      .select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId') \
-                     .filter(col('date') == '2022-07-02') \
-                     .filter(col('endpointID') == 'c8aedd57ce9df243') \
                      .toPandas()
+'''
 
 # COMMAND ----------
 
-visualize_plot(dataframe_debug)
+#visualize_plot(dataframe_debug)
 
 # COMMAND ----------
 
@@ -410,6 +417,12 @@ display(all_queries_comparison)
 
 # COMMAND ----------
 
+from datetime import datetime
+
+print(datetime.now())
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC 
 # MAGIC # Next steps
@@ -420,6 +433,7 @@ display(all_queries_comparison)
 # MAGIC - Same colors per endpoint/workspace across graphs?
 # MAGIC - What happens if a region is not available with serverless?
 # MAGIC - Exclude serverless SQL queries
+# MAGIC - Same clusterID on different days? 0101-011330-4vkdywl0 2022-01-01
 # MAGIC - Performance Optimization (disk spill)
 
 # COMMAND ----------
