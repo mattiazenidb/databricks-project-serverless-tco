@@ -161,6 +161,11 @@ workspaces = spark.read.table('prod.workspaces').filter(lower(col('canonicalCust
 
 # COMMAND ----------
 
+if workspaces.rdd.isEmpty():
+  raise Exception("Sorry, wrong customer name!")
+
+# COMMAND ----------
+
 workloads = spark.read.table('prod.workloads').select('date', 'approxDBUs', 'nodeHours', 'clusterId', 'clusterDriverNodeType', 'clusterWorkerNodeType', 'clusterWorkers', 'containerPricingUnits', 'etlRegion', 'clusterWorkers')
 
 # COMMAND ----------
@@ -314,24 +319,22 @@ visualize_plot(dataframe_serverless)
 
 # COMMAND ----------
 
-#display(all_queries)
+display(all_queries)
 
 # COMMAND ----------
 
-#dataframe_debug = all_queries \
-#                     .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-#                     .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTime', 'HH:mm:ss').cast('string'))) \
-#                     .withColumn("date", col('queryStartDateTime').cast('date')) \
-#                     .select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId') \
-#                     .filter(col('date') == '2022-07-02') \
-#                     .filter(col('endpointID') == 'c8aedd57ce9df243') \
-#                     .toPandas()
+dataframe_debug = all_queries \
+                     .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
+                     .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTime', 'HH:mm:ss').cast('string'))) \
+                     .withColumn("date", col('queryStartDateTime').cast('date')) \
+                     .select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId') \
+                     .filter(col('date') == '2022-07-02') \
+                     .filter(col('endpointID') == 'c8aedd57ce9df243') \
+                     .toPandas()
 
 # COMMAND ----------
 
-#'''
-#visualize_plot(dataframe_debug)
-#'''
+visualize_plot(dataframe_debug)
 
 # COMMAND ----------
 
@@ -414,6 +417,9 @@ display(all_queries_comparison)
 # MAGIC - Add autoscaling
 # MAGIC - Understand why NoneType can be present in compute_vm_cost
 # MAGIC - Is cluster restart at midnight an issue?
+# MAGIC - Same colors per endpoint/workspace across graphs?
+# MAGIC - What happens if a region is not available with serverless?
+# MAGIC - Exclude serverless SQL queries
 # MAGIC - Performance Optimization (disk spill)
 
 # COMMAND ----------
