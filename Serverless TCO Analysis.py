@@ -9,6 +9,9 @@ from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from pyspark.sql.window import Window
 
+import plotly.express as px
+import pandas as pd
+
 # COMMAND ----------
 
 startDate = dbutils.widgets.get('startDate')
@@ -117,6 +120,20 @@ def compute_vm_cost(clusterDriverNodeType, clusterWorkerNodeType, clusterWorkers
 
 # COMMAND ----------
 
+def visualize_plot(dataframe):
+  fig = px.timeline(dataframe, x_start="queryStartTimeDisplay", x_end="queryEndDateTimeWithAutostopDisplay", y="date", color="endpointID", opacity=0.5)
+  fig.update_yaxes(autorange="reversed")
+  fig.update_layout(
+                    xaxis = dict(
+                        title = 'Timestamp', 
+                        tickformat = '%H:%M:%S',
+                    ),
+                    xaxis_range=['1970-01-01T00:00:00', '1970-01-01T23:59:59']
+                    )
+  fig.show()
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC 
 # MAGIC # Prepare Data
@@ -127,6 +144,7 @@ thrift_statements = (spark.read.table("prod.thrift_statements")
       .filter(col('date').between(startDate, endDate))
       .select('clusterID', 'workspaceId', 'queryDurationSeconds', 'fetchDurationSeconds', 'date', 'timestamp', 'thriftStatementId')
       .withColumnRenamed('timestamp', 'queryEndDateTime')
+      .fillna(value=0, subset=["fetchDurationSeconds"])
 )
 
 # COMMAND ----------
@@ -148,7 +166,7 @@ workloads = spark.read.table('prod.workloads').select('date', 'approxDBUs', 'nod
 all_queries = (thrift_statements
              .join(cluster_endpoint_mapping, [cluster_endpoint_mapping['clusterID'] == thrift_statements['clusterID'], cluster_endpoint_mapping['workspaceId'] == thrift_statements['workspaceId']])
              .join(workspaces, [cluster_endpoint_mapping['workspaceId'] == workspaces['workspaceId']])
-             .withColumn('queryStartDateTime', to_timestamp((((unix_timestamp('queryEndDateTime') + substring('queryEndDateTime', -3, 3).cast('float') / 1000) * 1000) - thrift_statements['queryDurationSeconds']*1000 - thrift_statements['fetchDurationSeconds']*1000) / 1000))
+             .withColumn('queryStartDateTime', to_timestamp((((unix_timestamp('queryEndDateTime') + date_format(col("queryEndDateTime"), "SSS").cast('float') / 1000) * 1000) - thrift_statements['queryDurationSeconds'] * 1000 - thrift_statements['fetchDurationSeconds'] * 1000) / 1000)) \
              .select(thrift_statements['date'], 'queryStartDateTime', thrift_statements['queryEndDateTime'], thrift_statements['workspaceId'], cluster_endpoint_mapping['endpointID'], thrift_statements['clusterID'], thrift_statements['thriftStatementId'], thrift_statements['queryDurationSeconds'], thrift_statements['fetchDurationSeconds'])
              .drop('date')
              .orderBy('queryStartDateTime')
@@ -191,9 +209,9 @@ all_queries_grouped_autostop_with_dbu_classic = all_warehouses_grouped.join(work
             sum('approxDBUs').alias('totalDBUs')
           ) \
          .withColumn('totalDollarDBUs', col('totalDBUs') * costPerDbuClassic) \
-         .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
          .withColumn('totalDollarVM', compute_vm_cost('clusterDriverNodeType', 'clusterWorkerNodeType', 'clusterWorkers', 'etlRegion') * col('nodeHours')) \
          .withColumn('totalDollar', col('totalDollarVM') + col('totalDollarDBUs')) \
+         .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
          .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))).cache()
 
 # COMMAND ----------
@@ -238,9 +256,10 @@ all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_
          .agg(
             max('queryStartDateTime').alias('queryStartDateTime'),
             max('queryEndDateTimeWithAutostop').alias('queryEndDateTimeWithAutostop'),
-            sum('containerPricingUnits').alias('totalDBUs')
+            sum('containerPricingUnits').alias('totalContainerPricingUnits')
           ) \
-         .withColumn('totalDollarDBUs', col('totalDBUs') / (60 * 60) * (unix_timestamp('queryEndDateTimeWithAutostop') - unix_timestamp('queryStartDateTime')) * return_serverless_cost('etlRegion')) \
+         .withColumn('totalDBUs', col('totalContainerPricingUnits') / (60 * 60) * (unix_timestamp('queryEndDateTimeWithAutostop') - unix_timestamp('queryStartDateTime'))) \
+         .withColumn('totalDollarDBUs', col('totalDBUs') * return_serverless_cost('etlRegion')) \
          .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
          .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))).cache()
 
@@ -262,19 +281,7 @@ dataframe_classic = all_queries_grouped_autostop_with_dbu_classic.select('queryS
 
 # COMMAND ----------
 
-import plotly.express as px
-import pandas as pd
-
-fig = px.timeline(dataframe_classic, x_start="queryStartTimeDisplay", x_end="queryEndDateTimeWithAutostopDisplay", y="date", color="endpointID", opacity=0.5)
-fig.update_yaxes(autorange="reversed")
-fig.update_layout(
-                  xaxis = dict(
-                      title = 'Timestamp', 
-                      tickformat = '%H:%M:%S',
-                  ),
-                  xaxis_range=['1970-01-01T00:00:00', '1970-01-01T23:59:59']
-                  )
-fig.show()
+visualize_plot(dataframe_classic)
 
 # COMMAND ----------
 
@@ -288,19 +295,35 @@ dataframe_serverless = all_queries_grouped_autostop_with_dbu_serverless.select('
 
 # COMMAND ----------
 
-import plotly.express as px
-import pandas as pd
+visualize_plot(dataframe_serverless)
 
-fig = px.timeline(dataframe_serverless, x_start="queryStartTimeDisplay", x_end="queryEndDateTimeWithAutostopDisplay", y="date", color="endpointID", opacity=0.5)
-fig.update_yaxes(autorange="reversed")
-fig.update_layout(
-                  xaxis = dict(
-                      title = 'Timestamp', 
-                      tickformat = '%H:%M:%S',
-                  ),
-                  xaxis_range=['1970-01-01T00:00:00', '1970-01-01T23:59:59']
-                  )
-fig.show()
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC 
+# MAGIC # Debug
+
+# COMMAND ----------
+
+display(all_queries)
+
+# COMMAND ----------
+
+dataframe_debug = all_queries \
+                     .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
+                     .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTime', 'HH:mm:ss').cast('string'))) \
+                     .withColumn("date", col('queryStartDateTime').cast('date')) \
+                     .select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId').toPandas()
+
+# COMMAND ----------
+
+display(dataframe_debug)
+
+# COMMAND ----------
+
+'''
+visualize_plot(dataframe_debug)
+'''
 
 # COMMAND ----------
 
@@ -383,3 +406,4 @@ display(all_queries)
 # MAGIC - Fix overlapping queries
 # MAGIC - Add autoscaling
 # MAGIC - Understand why NoneType can be present in compute_vm_cost
+# MAGIC - Optimize
