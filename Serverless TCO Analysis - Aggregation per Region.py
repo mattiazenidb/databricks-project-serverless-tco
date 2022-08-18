@@ -26,11 +26,12 @@ start_time = datetime.now()
 
 startDate = dbutils.widgets.get('startDate')
 endDate = dbutils.widgets.get('endDate')
-customerName = dbutils.widgets.get('customerName')
 costPerDbuClassic = float(dbutils.widgets.get('costPerDbuClassic'))
 vmDiscountPercentage = int(dbutils.widgets.get('vmDiscountPercentage'))
 serverlessDbuDiscountPercentage = int(dbutils.widgets.get('serverlessDbuDiscountPercentage'))
 autoStopSeconds = int(dbutils.widgets.get('autoStopSeconds'))
+region = dbutils.widgets.get('region')
+topXCustomers = int(dbutils.widgets.get('topXCustomers'))
 
 # COMMAND ----------
 
@@ -109,8 +110,6 @@ vm_prices['ap-southeast-2']['i3.16xlarge'] = 5.984
 
 # COMMAND ----------
 
-#maybe replace with broadcast join?
-
 @udf('double')
 def return_serverless_cost(etlRegion):
   if etlRegion in serverless_dbu_prices:
@@ -119,8 +118,6 @@ def return_serverless_cost(etlRegion):
     return 0
 
 # COMMAND ----------
-
-#maybe replace with broadcast join?
 
 @udf('double')
 def compute_vm_cost(clusterDriverNodeType, clusterWorkerNodeType, clusterWorkers, etlRegion):
@@ -159,11 +156,24 @@ def visualize_plot(dataframe):
 
 # COMMAND ----------
 
+accounts = spark.read.table('finance.dbu_dollars') \
+              .filter(col('date').between(startDate, endDate)) \
+              .filter(col('sfdc_region_l2').contains(region)) \
+              .filter(lower('sku').contains('sql')) \
+              .groupBy('accountName') \
+              .agg(max('sku').alias('skus'),
+                   sum('DBU').alias('dbus')) \
+              .orderBy(col('dbus').desc()) \
+              .drop('skus', 'dbus') \
+              .limit(topXCustomers)
+
+# COMMAND ----------
+
 thrift_statements = (spark.read.table("prod.thrift_statements")
       .filter(col('date').between(startDate, endDate))
       .select('clusterID', 'workspaceId', 'queryDurationSeconds', 'fetchDurationSeconds', 'date', 'timestamp', 'thriftStatementId')
       .withColumnRenamed('timestamp', 'queryEndDateTime')
-      .fillna(value=0, subset=["fetchDurationSeconds"])
+      .fillna(value = 0, subset=["fetchDurationSeconds"])
 )
 
 # COMMAND ----------
@@ -172,7 +182,10 @@ cluster_endpoint_mapping = spark.read.table("prod_ds.cluster_endpoint_mapping")
 
 # COMMAND ----------
 
-workspaces = spark.read.table('prod.workspaces').select('workspaceId', 'canonicalCustomerName').filter(lower(col('canonicalCustomerName')) == customerName.lower())
+workspaces = spark.read.table('prod.workspaces') \
+              .select('workspaceId', 'canonicalCustomerName') \
+              .join(accounts.hint('broadcast'), lower(col('canonicalCustomerName')) == lower(accounts.accountName)) \
+              .drop('accountName')
 
 # COMMAND ----------
 
@@ -191,7 +204,7 @@ all_queries = (thrift_statements
              .join(cluster_endpoint_mapping.hint("broadcast"), [cluster_endpoint_mapping['clusterID'] == thrift_statements['clusterID'], cluster_endpoint_mapping['workspaceId'] == thrift_statements['workspaceId']])
              .join(workspaces.hint("broadcast"), [cluster_endpoint_mapping['workspaceId'] == workspaces['workspaceId']])
              .withColumn('queryStartDateTime', to_timestamp((((unix_timestamp('queryEndDateTime') + date_format(col("queryEndDateTime"), "SSS").cast('float') / 1000) * 1000) - thrift_statements['queryDurationSeconds'] * 1000 - thrift_statements['fetchDurationSeconds'] * 1000) / 1000)) \
-             .select(thrift_statements['date'], 'queryStartDateTime', thrift_statements['queryEndDateTime'], thrift_statements['workspaceId'], cluster_endpoint_mapping['endpointID'], thrift_statements['clusterID'], thrift_statements['thriftStatementId'], thrift_statements['queryDurationSeconds'], thrift_statements['fetchDurationSeconds'])
+             .select(thrift_statements['date'], 'queryStartDateTime', thrift_statements['queryEndDateTime'], thrift_statements['workspaceId'], cluster_endpoint_mapping['endpointID'], thrift_statements['clusterID'], thrift_statements['thriftStatementId'], thrift_statements['queryDurationSeconds'], thrift_statements['fetchDurationSeconds'], workspaces['canonicalCustomerName'])
              .drop('date')
              .orderBy('queryStartDateTime')
 )
@@ -211,7 +224,7 @@ all_queries = (thrift_statements
 # COMMAND ----------
 
 all_warehouses_grouped = all_queries \
-  .groupBy('clusterID', 'endpointID', 'workspaceId') \
+  .groupBy('clusterID', 'endpointID', 'workspaceId', 'canonicalCustomerName') \
   .agg(
     min('queryStartDateTime').alias('queryStartDateTime'),
     max('queryEndDateTime').alias('queryEndDateTime')
@@ -222,9 +235,9 @@ all_warehouses_grouped = all_queries \
 # COMMAND ----------
 
 all_queries_grouped_autostop_with_dbu_classic = all_warehouses_grouped.join(workloads, [workloads.date == all_warehouses_grouped.date, workloads.clusterId == all_warehouses_grouped.clusterID]) \
-         .select(workloads.date, workloads.clusterId, workloads.clusterDriverNodeType, workloads.clusterWorkerNodeType, workloads.clusterWorkers, workloads.etlRegion, workloads.containerPricingUnits, all_warehouses_grouped.endpointID, all_warehouses_grouped.queryStartDateTime, all_warehouses_grouped.queryEndDateTime, workloads.nodeHours, workloads.approxDBUs, all_warehouses_grouped.workspaceId) \
+         .select(workloads.date, workloads.clusterId, workloads.clusterDriverNodeType, workloads.clusterWorkerNodeType, workloads.clusterWorkers, workloads.etlRegion, workloads.containerPricingUnits, all_warehouses_grouped.endpointID, all_warehouses_grouped.queryStartDateTime, all_warehouses_grouped.queryEndDateTime, workloads.nodeHours, workloads.approxDBUs, all_warehouses_grouped.workspaceId, all_warehouses_grouped.canonicalCustomerName) \
          .withColumn('queryEndDateTimeWithAutostop', to_timestamp((((unix_timestamp('queryStartDateTime')) + workloads.nodeHours * 60 * 60))))\
-         .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'clusterDriverNodeType', 'clusterWorkerNodeType', 'etlRegion') \
+         .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'canonicalCustomerName', 'clusterDriverNodeType', 'clusterWorkerNodeType', 'etlRegion') \
          .agg(
             max('queryStartDateTime').alias('queryStartDateTime'),
             max('queryEndDateTime').alias('queryEndDateTime'),
@@ -256,6 +269,7 @@ all_previous_rows_window = Window \
 # COMMAND ----------
 
 all_queries_grouped_autostop_serverless = all_queries \
+  .select('clusterID', 'endpointID', 'workspaceId', 'canonicalCustomerName', 'queryEndDateTime', 'queryStartDateTime') \
   .withColumn('max_previous_end', max('queryEndDateTime').over(all_previous_rows_window)) \
   .withColumn('interval_change', when(
     col('queryStartDateTime') - expr('INTERVAL {} SECONDS'.format(autoStopSeconds)) > lag('max_previous_end').over(Window.orderBy('queryStartDateTime')), 
@@ -263,7 +277,7 @@ all_queries_grouped_autostop_serverless = all_queries \
   ).otherwise(lit(0))) \
   .withColumn('interval_id', sum('interval_change').over(all_previous_rows_window)) \
   .drop('interval_change', 'max_previous_end') \
-  .groupBy('interval_id', 'clusterID', 'endpointID', 'workspaceId') \
+  .groupBy('interval_id', 'clusterID', 'endpointID', 'workspaceId', 'canonicalCustomerName') \
   .agg(
     min('queryStartDateTime').alias('queryStartDateTime'),
     max('queryEndDateTime').alias('queryEndDateTime')
@@ -278,8 +292,8 @@ all_queries_grouped_autostop_serverless = all_queries \
 # COMMAND ----------
 
 all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_serverless.join(workloads, [workloads.date == all_queries_grouped_autostop_serverless.date, workloads.clusterId == all_queries_grouped_autostop_serverless.clusterID]) \
-         .select(workloads.date, workloads.clusterId, workloads.containerPricingUnits, workloads.etlRegion, workloads.clusterWorkers, all_queries_grouped_autostop_serverless.endpointID, all_queries_grouped_autostop_serverless.queryStartDateTime, all_queries_grouped_autostop_serverless.queryEndDateTimeWithAutostop, all_queries_grouped_autostop_serverless.workspaceId) \
-         .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'etlRegion') \
+         .select(workloads.date, workloads.clusterId, workloads.containerPricingUnits, workloads.etlRegion, workloads.clusterWorkers, all_queries_grouped_autostop_serverless.endpointID, all_queries_grouped_autostop_serverless.queryStartDateTime, all_queries_grouped_autostop_serverless.queryEndDateTimeWithAutostop, all_queries_grouped_autostop_serverless.workspaceId, all_queries_grouped_autostop_serverless.canonicalCustomerName) \
+         .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'canonicalCustomerName', 'etlRegion') \
          .agg(
             max('queryStartDateTime').alias('queryStartDateTime'),
             max('queryEndDateTimeWithAutostop').alias('queryEndDateTimeWithAutostop'),
@@ -291,65 +305,6 @@ all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_
           .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
           .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
           .cache()
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC 
-# MAGIC # Visualize Data
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC 
-# MAGIC ### Classic
-
-# COMMAND ----------
-
-#dataframe_classic = all_queries_grouped_autostop_with_dbu_classic.select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId').orderBy('queryStartTimeDisplay').toPandas()
-
-# COMMAND ----------
-
-#visualize_plot(dataframe_classic)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC 
-# MAGIC ### Serverless
-
-# COMMAND ----------
-
-#dataframe_serverless = all_queries_grouped_autostop_with_dbu_serverless.select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID').orderBy('queryStartTimeDisplay').toPandas()
-
-# COMMAND ----------
-
-#visualize_plot(dataframe_serverless)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC 
-# MAGIC # Debug
-
-# COMMAND ----------
-
-#display(all_queries)
-
-# COMMAND ----------
-
-'''
-dataframe_debug = all_queries \
-                     .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-                     .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTime', 'HH:mm:ss').cast('string'))) \
-                     .withColumn("date", col('queryStartDateTime').cast('date')) \
-                     .select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId') \
-                     .toPandas()
-'''
-
-# COMMAND ----------
-
-#visualize_plot(dataframe_debug)
 
 # COMMAND ----------
 
@@ -369,7 +324,7 @@ display(all_queries_grouped_autostop_with_dbu_classic)
 
 # COMMAND ----------
 
-results_classic = all_queries_grouped_autostop_with_dbu_classic.groupBy('endpointID').agg(sum('totalDollar').alias('totalDollarClassic'), sum('totalDollarDBUs').alias('totalDollarDBUs'), sum('totalDollarVM').alias('totalDollarVM')).orderBy('totalDollarClassic')
+results_classic = all_queries_grouped_autostop_with_dbu_classic.groupBy('endpointID', 'canonicalCustomerName').agg(sum('totalDollar').alias('totalDollarClassic'), sum('totalDollarDBUs').alias('totalDollarDBUs'), sum('totalDollarVM').alias('totalDollarVM')).orderBy('totalDollarClassic')
 
 # COMMAND ----------
 
@@ -434,19 +389,11 @@ print(datetime.now())
 # MAGIC 
 # MAGIC # Next steps
 # MAGIC 
-# MAGIC - Add autoscaling (I believe it is already added for Classic, need to add it for Serverless)
+# MAGIC - Add autoscaling
 # MAGIC - Understand why NoneType can be present in compute_vm_cost
 # MAGIC - Is cluster restart at midnight an issue?
+# MAGIC - Same colors per endpoint/workspace across graphs?
 # MAGIC - What happens if a region is not available with serverless?
 # MAGIC - Exclude serverless SQL queries
 # MAGIC - Same clusterID on different days? 0101-011330-4vkdywl0 2022-01-01
-# MAGIC - Same colors per endpoint/workspace across graphs?
 # MAGIC - Performance Optimization (disk spill)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC 
-# MAGIC # Known issues
-# MAGIC 
-# MAGIC - Visualization of queries than span multiple days does not work. E.g., StartTime = 2022-07-03T05:04:34.006+0000,  EndTime = 2022-07-04T06:19:04.000+0000
