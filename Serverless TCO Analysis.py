@@ -120,18 +120,25 @@ def return_serverless_cost(etlRegion):
 
 # COMMAND ----------
 
-#maybe replace with broadcast join?
-
 @udf('double')
 def compute_vm_cost(clusterDriverNodeType, clusterWorkerNodeType, clusterWorkers, etlRegion):
   clusterWorkers = 1 if clusterWorkers is None else clusterWorkers
   
   if etlRegion in vm_prices:
     vm_prices_per_region = vm_prices[etlRegion]
-    return vm_prices_per_region[clusterDriverNodeType] * (100-vmDiscountPercentage)/100 + vm_prices_per_region[clusterWorkerNodeType] * (100-vmDiscountPercentage)/100 * clusterWorkers
+    if clusterDriverNodeType in vm_prices_per_region:
+      return vm_prices_per_region[clusterDriverNodeType] * (100-vmDiscountPercentage)/100 + vm_prices_per_region[clusterWorkerNodeType] * (100-vmDiscountPercentage)/100 * clusterWorkers
+    else:
+        if etlRegion.contains('-'):
+          return vm_prices_per_region['i3.8xlarge'] * (100-vmDiscountPercentage)/100 + vm_prices_per_region['i3.2xlarge'] * (100-vmDiscountPercentage)/100 * clusterWorkers
+        else:
+          return vm_prices_per_region['Standard_E32ds_v4'] * (100-vmDiscountPercentage)/100 + vm_prices_per_region['Standard_E8ds_v4'] * (100-vmDiscountPercentage)/100 * clusterWorkers
   else:
     vm_prices_per_region = vm_prices['us-east-1']
-    return vm_prices_per_region[clusterDriverNodeType] * (100-vmDiscountPercentage)/100 + vm_prices_per_region[clusterWorkerNodeType] * (100-vmDiscountPercentage)/100 * clusterWorkers
+    if clusterDriverNodeType in vm_prices_per_region:
+      return vm_prices_per_region[clusterDriverNodeType] * (100-vmDiscountPercentage)/100 + vm_prices_per_region[clusterWorkerNodeType] * (100-vmDiscountPercentage)/100 * clusterWorkers
+    else:
+        return vm_prices_per_region['i3.8xlarge'] * (100-vmDiscountPercentage)/100 + vm_prices_per_region['i3.2xlarge'] * (100-vmDiscountPercentage)/100 * clusterWorkers
 
 # COMMAND ----------
 
@@ -306,11 +313,15 @@ all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_
 
 # COMMAND ----------
 
-#dataframe_classic = all_queries_grouped_autostop_with_dbu_classic.select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId').orderBy('queryStartTimeDisplay').toPandas()
+dataframe_classic = all_queries_grouped_autostop_with_dbu_classic.select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId').toPandas()
 
 # COMMAND ----------
 
-#visualize_plot(dataframe_classic)
+display(dataframe_classic)
+
+# COMMAND ----------
+
+visualize_plot(dataframe_classic)
 
 # COMMAND ----------
 
@@ -320,11 +331,11 @@ all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_
 
 # COMMAND ----------
 
-#dataframe_serverless = all_queries_grouped_autostop_with_dbu_serverless.select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID').orderBy('queryStartTimeDisplay').toPandas()
+dataframe_serverless = all_queries_grouped_autostop_with_dbu_serverless.select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID').toPandas()
 
 # COMMAND ----------
 
-#visualize_plot(dataframe_serverless)
+visualize_plot(dataframe_serverless)
 
 # COMMAND ----------
 
@@ -334,22 +345,22 @@ all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_
 
 # COMMAND ----------
 
-#display(all_queries)
+display(all_queries)
 
 # COMMAND ----------
 
-'''
+
 dataframe_debug = all_queries \
                      .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
                      .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTime', 'HH:mm:ss').cast('string'))) \
                      .withColumn("date", col('queryStartDateTime').cast('date')) \
                      .select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId') \
                      .toPandas()
-'''
+
 
 # COMMAND ----------
 
-#visualize_plot(dataframe_debug)
+visualize_plot(dataframe_debug)
 
 # COMMAND ----------
 
@@ -383,7 +394,7 @@ display(results_classic.groupBy().sum())
 
 # MAGIC %md
 # MAGIC 
-# MAGIC ### Serveless
+# MAGIC ### Serverless
 
 # COMMAND ----------
 
@@ -409,19 +420,19 @@ display(results_serverless.groupBy().sum())
 
 # COMMAND ----------
 
-all_queries_grouped_autostop_with_dbu_classic_filtered = all_queries_grouped_autostop_with_dbu_classic.select(col('date').alias('date_classic'), col('clusterID').alias('clusterID_classic'), col('endpointID').alias('endpointID_classic'), col('workspaceId').alias('workspaceId_classic'), col('etlRegion').alias('etlRegion_classic'), col('totalDollarDBUs').alias('totalDollarDBUs_classic'), col('totalDollarVM').alias('totalDollarVM_classic'), col('totalDollar').alias('totalDollar_classic'))
+#all_queries_grouped_autostop_with_dbu_classic_filtered = all_queries_grouped_autostop_with_dbu_classic.select(col('date').alias('date_classic'), col('clusterID').alias('clusterID_classic'), col('endpointID').alias('endpointID_classic'), col('workspaceId').alias('workspaceId_classic'), col('etlRegion').alias('etlRegion_classic'), col('totalDollarDBUs').alias('totalDollarDBUs_classic'), col('totalDollarVM').alias('totalDollarVM_classic'), col('totalDollar').alias('totalDollar_classic'))
 
 # COMMAND ----------
 
-all_queries_grouped_autostop_with_dbu_serverless_filtered = all_queries_grouped_autostop_with_dbu_serverless.select(col('date').alias('date_serverless'), col('clusterID').alias('clusterID_serverless'), col('endpointID').alias('endpointID_serverless'), col('workspaceId').alias('workspaceId_serverless'), col('etlRegion').alias('etlRegion_serverless'), col('totalDBUs').alias('totalDBUs_serverless'), col('totalDollarDBUs').alias('totalDollarDBUs_serverless'))
+#all_queries_grouped_autostop_with_dbu_serverless_filtered = all_queries_grouped_autostop_with_dbu_serverless.select(col('date').alias('date_serverless'), col('clusterID').alias('clusterID_serverless'), col('endpointID').alias('endpointID_serverless'), col('workspaceId').alias('workspaceId_serverless'), col('etlRegion').alias('etlRegion_serverless'), col('totalDBUs').alias('totalDBUs_serverless'), col('totalDollarDBUs').alias('totalDollarDBUs_serverless'))
 
 # COMMAND ----------
 
-all_queries_comparison =  all_queries_grouped_autostop_with_dbu_classic_filtered.join(all_queries_grouped_autostop_with_dbu_serverless_filtered, [all_queries_grouped_autostop_with_dbu_classic_filtered.date_classic == all_queries_grouped_autostop_with_dbu_serverless_filtered.date_serverless, all_queries_grouped_autostop_with_dbu_classic_filtered.clusterID_classic == all_queries_grouped_autostop_with_dbu_serverless_filtered.clusterID_serverless])
+#all_queries_comparison =  all_queries_grouped_autostop_with_dbu_classic_filtered.join(all_queries_grouped_autostop_with_dbu_serverless_filtered, [all_queries_grouped_autostop_with_dbu_classic_filtered.date_classic == all_queries_grouped_autostop_with_dbu_serverless_filtered.date_serverless, all_queries_grouped_autostop_with_dbu_classic_filtered.clusterID_classic == all_queries_grouped_autostop_with_dbu_serverless_filtered.clusterID_serverless])
 
 # COMMAND ----------
 
-display(all_queries_comparison)
+#display(all_queries_comparison)
 
 # COMMAND ----------
 

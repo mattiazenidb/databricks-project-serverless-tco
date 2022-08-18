@@ -139,10 +139,6 @@ def return_serverless_cost(etlRegion):
 
 # COMMAND ----------
 
-vm_prices.keys()
-
-# COMMAND ----------
-
 @udf('double')
 def compute_vm_cost(clusterDriverNodeType, clusterWorkerNodeType, clusterWorkers, etlRegion):
   clusterWorkers = 1 if clusterWorkers is None else clusterWorkers
@@ -389,7 +385,7 @@ display(results_serverless)
 
 # COMMAND ----------
 
-results = results_serverless.join(results_classic, results_classic.canonicalCustomerName == results_serverless.canonicalCustomerName).drop(results_classic.canonicalCustomerName).withColumn('accountTeamTCOVariation', col('totalDollarServerless') - col('totalDollarClassic')).withColumn('accountTCOVariation', col('totalDollarClassic') - col('totalDollarServerless')).withColumn('accountTCOVariationPercentage', col('accountTCOVariation') / col('totalDollarClassic') * 100)
+results = results_serverless.join(results_classic, results_classic.canonicalCustomerName == results_serverless.canonicalCustomerName).drop(results_classic.canonicalCustomerName).withColumn('accountTeamTCOVariation', col('totalDollarServerless') - col('totalDollarDBUs')).withColumn('accountTCOVariation', col('totalDollarClassic') - col('totalDollarServerless')).withColumn('accountTCOVariationPercentage', col('accountTCOVariation') / col('totalDollarClassic') * 100)
 
 # COMMAND ----------
 
