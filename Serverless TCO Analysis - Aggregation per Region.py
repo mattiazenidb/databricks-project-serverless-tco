@@ -56,26 +56,46 @@ vm_prices['westeurope']['Standard_E8ds_v4'] = 0.692
 vm_prices['westeurope']['Standard_E16ds_v4'] = 1.384
 vm_prices['westeurope']['Standard_E32ds_v4'] = 2.768
 vm_prices['westeurope']['Standard_E64ds_v4'] = 5.536
+vm_prices['westeurope']['Standard_E8_v3'] = 0.640
+vm_prices['westeurope']['Standard_E16_v3'] = 1.280
+vm_prices['westeurope']['Standard_E32_v3'] = 2.560
+vm_prices['westeurope']['Standard_E64_v3'] = 4.376
 vm_prices['northeurope'] = {}
 vm_prices['northeurope']['Standard_E8ds_v4'] = 0.640
 vm_prices['northeurope']['Standard_E16ds_v4'] = 1.280
 vm_prices['northeurope']['Standard_E32ds_v4'] = 2.560
 vm_prices['northeurope']['Standard_E64ds_v4'] = 5.120
+vm_prices['northeurope']['Standard_E8_v3'] = 0.564
+vm_prices['northeurope']['Standard_E16_v3'] = 1.128
+vm_prices['northeurope']['Standard_E32_v3'] = 2.256
+vm_prices['northeurope']['Standard_E64_v3'] = 4.061
 vm_prices['westus'] = {}
 vm_prices['westus']['Standard_E8ds_v4'] = 0.648
 vm_prices['westus']['Standard_E16ds_v4'] = 1.296
 vm_prices['westus']['Standard_E32ds_v4'] = 2.592
 vm_prices['westus']['Standard_E64ds_v4'] = 5.184
+vm_prices['westus']['Standard_E8_v3'] = 0.560
+vm_prices['westus']['Standard_E16_v3'] = 1.120
+vm_prices['westus']['Standard_E32_v3'] = 2.240
+vm_prices['westus']['Standard_E64_v3'] = 4.032
 vm_prices['eastus2'] = {}
 vm_prices['eastus2']['Standard_E8ds_v4'] = 0.576
 vm_prices['eastus2']['Standard_E16ds_v4'] = 1.134
 vm_prices['eastus2']['Standard_E32ds_v4'] = 2.268
 vm_prices['eastus2']['Standard_E64ds_v4'] = 4.608
+vm_prices['eastus2']['Standard_E8_v3'] = 0.532
+vm_prices['eastus2']['Standard_E16_v3'] = 1.064
+vm_prices['eastus2']['Standard_E32_v3'] = 2.128
+vm_prices['eastus2']['Standard_E64_v3'] = 3.629
 vm_prices['eastus'] = {}
 vm_prices['eastus']['Standard_E8ds_v4'] = 0.576
 vm_prices['eastus']['Standard_E16ds_v4'] = 1.134
 vm_prices['eastus']['Standard_E32ds_v4'] = 2.268
 vm_prices['eastus']['Standard_E64ds_v4'] = 4.608
+vm_prices['eastus']['Standard_E8_v3'] = 0.504
+vm_prices['eastus']['Standard_E16_v3'] = 1.008
+vm_prices['eastus']['Standard_E32_v3'] = 2.016
+vm_prices['eastus']['Standard_E64_v3'] = 3.629
 
 vm_prices['us-east-1'] = {}
 vm_prices['us-east-1']['i3.2xlarge'] = 0.624
@@ -119,16 +139,29 @@ def return_serverless_cost(etlRegion):
 
 # COMMAND ----------
 
+vm_prices.keys()
+
+# COMMAND ----------
+
 @udf('double')
 def compute_vm_cost(clusterDriverNodeType, clusterWorkerNodeType, clusterWorkers, etlRegion):
   clusterWorkers = 1 if clusterWorkers is None else clusterWorkers
   
   if etlRegion in vm_prices:
     vm_prices_per_region = vm_prices[etlRegion]
-    return vm_prices_per_region[clusterDriverNodeType] * (100-vmDiscountPercentage)/100 + vm_prices_per_region[clusterWorkerNodeType] * (100-vmDiscountPercentage)/100 * clusterWorkers
+    if clusterDriverNodeType in vm_prices_per_region:
+      return vm_prices_per_region[clusterDriverNodeType] * (100-vmDiscountPercentage)/100 + vm_prices_per_region[clusterWorkerNodeType] * (100-vmDiscountPercentage)/100 * clusterWorkers
+    else:
+        if etlRegion.contains('-'):
+          return vm_prices_per_region['i3.8xlarge'] * (100-vmDiscountPercentage)/100 + vm_prices_per_region['i3.2xlarge'] * (100-vmDiscountPercentage)/100 * clusterWorkers
+        else:
+          return vm_prices_per_region['Standard_E32ds_v4'] * (100-vmDiscountPercentage)/100 + vm_prices_per_region['Standard_E8ds_v4'] * (100-vmDiscountPercentage)/100 * clusterWorkers
   else:
     vm_prices_per_region = vm_prices['us-east-1']
-    return vm_prices_per_region[clusterDriverNodeType] * (100-vmDiscountPercentage)/100 + vm_prices_per_region[clusterWorkerNodeType] * (100-vmDiscountPercentage)/100 * clusterWorkers
+    if clusterDriverNodeType in vm_prices_per_region:
+      return vm_prices_per_region[clusterDriverNodeType] * (100-vmDiscountPercentage)/100 + vm_prices_per_region[clusterWorkerNodeType] * (100-vmDiscountPercentage)/100 * clusterWorkers
+    else:
+        return vm_prices_per_region['i3.8xlarge'] * (100-vmDiscountPercentage)/100 + vm_prices_per_region['i3.2xlarge'] * (100-vmDiscountPercentage)/100 * clusterWorkers
 
 # COMMAND ----------
 
@@ -324,15 +357,11 @@ display(all_queries_grouped_autostop_with_dbu_classic)
 
 # COMMAND ----------
 
-results_classic = all_queries_grouped_autostop_with_dbu_classic.groupBy('endpointID', 'canonicalCustomerName').agg(sum('totalDollar').alias('totalDollarClassic'), sum('totalDollarDBUs').alias('totalDollarDBUs'), sum('totalDollarVM').alias('totalDollarVM')).orderBy('totalDollarClassic')
+results_classic = all_queries_grouped_autostop_with_dbu_classic.groupBy('canonicalCustomerName').agg(sum('totalDollar').alias('totalDollarClassic'), sum('totalDollarDBUs').alias('totalDollarDBUs'), sum('totalDollarVM').alias('totalDollarVM')).orderBy('totalDollarClassic')
 
 # COMMAND ----------
 
 display(results_classic)
-
-# COMMAND ----------
-
-display(results_classic.groupBy().sum())
 
 # COMMAND ----------
 
@@ -346,15 +375,11 @@ display(all_queries_grouped_autostop_with_dbu_serverless)
 
 # COMMAND ----------
 
-results_serverless = all_queries_grouped_autostop_with_dbu_serverless.groupBy('endpointID').agg(sum('totalDollarDBUs').alias('totalDollarServerless')).orderBy('totalDollarServerless')
+results_serverless = all_queries_grouped_autostop_with_dbu_serverless.groupBy('canonicalCustomerName').agg(sum('totalDollarDBUs').alias('totalDollarServerless')).orderBy('totalDollarServerless')
 
 # COMMAND ----------
 
 display(results_serverless)
-
-# COMMAND ----------
-
-display(results_serverless.groupBy().sum())
 
 # COMMAND ----------
 
@@ -364,19 +389,11 @@ display(results_serverless.groupBy().sum())
 
 # COMMAND ----------
 
-all_queries_grouped_autostop_with_dbu_classic_filtered = all_queries_grouped_autostop_with_dbu_classic.select(col('date').alias('date_classic'), col('clusterID').alias('clusterID_classic'), col('endpointID').alias('endpointID_classic'), col('workspaceId').alias('workspaceId_classic'), col('etlRegion').alias('etlRegion_classic'), col('totalDollarDBUs').alias('totalDollarDBUs_classic'), col('totalDollarVM').alias('totalDollarVM_classic'), col('totalDollar').alias('totalDollar_classic'))
+results = results_serverless.join(results_classic, results_classic.canonicalCustomerName == results_serverless.canonicalCustomerName).drop(results_classic.canonicalCustomerName).withColumn('accountTeamTCOVariation', col('totalDollarServerless') - col('totalDollarClassic')).withColumn('accountTCOVariation', col('totalDollarClassic') - col('totalDollarServerless')).withColumn('accountTCOVariationPercentage', col('accountTCOVariation') / col('totalDollarClassic') * 100)
 
 # COMMAND ----------
 
-all_queries_grouped_autostop_with_dbu_serverless_filtered = all_queries_grouped_autostop_with_dbu_serverless.select(col('date').alias('date_serverless'), col('clusterID').alias('clusterID_serverless'), col('endpointID').alias('endpointID_serverless'), col('workspaceId').alias('workspaceId_serverless'), col('etlRegion').alias('etlRegion_serverless'), col('totalDBUs').alias('totalDBUs_serverless'), col('totalDollarDBUs').alias('totalDollarDBUs_serverless'))
-
-# COMMAND ----------
-
-all_queries_comparison =  all_queries_grouped_autostop_with_dbu_classic_filtered.join(all_queries_grouped_autostop_with_dbu_serverless_filtered, [all_queries_grouped_autostop_with_dbu_classic_filtered.date_classic == all_queries_grouped_autostop_with_dbu_serverless_filtered.date_serverless, all_queries_grouped_autostop_with_dbu_classic_filtered.clusterID_classic == all_queries_grouped_autostop_with_dbu_serverless_filtered.clusterID_serverless])
-
-# COMMAND ----------
-
-display(all_queries_comparison)
+display(results)
 
 # COMMAND ----------
 
