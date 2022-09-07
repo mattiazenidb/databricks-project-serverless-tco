@@ -177,11 +177,11 @@ def visualize_plot_warehouses(dataframe):
 
 def visualize_plot_queries(dataframe):
   new_dates = [
-    elt for _, row in dataframe.withColumn("date", col('queryStartDateTime').cast('date')).select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId').toPandas().iterrows() for elt in split_date(row["queryStartDateTime"], row["queryEndDateTimeWithAutostop"], row["date"], row["endpointID"])
+    elt for _, row in dataframe.withColumn("date", col('queryStartDateTime').cast('date')).select('queryStartDateTime', 'queryEndDateTime', 'date', 'endpointID', 'clusterID', 'workspaceId').toPandas().iterrows() for elt in split_date(row["queryStartDateTime"], row["queryEndDateTime"], row["date"], row["endpointID"])
   ]      
-  dataframe_serverless = pd.DataFrame(new_dates, columns=["queryStartDateTime", "queryEndDateTimeWithAutostop", "date", "endpointID"])
+  dataframe_serverless = pd.DataFrame(new_dates, columns=["queryStartDateTime", "queryEndDateTime", "date", "endpointID"])
   
-  fig = px.timeline(dataframe_serverless, x_start="queryStartDateTime", x_end="queryEndDateTimeWithAutostop", y="date", color="endpointID", opacity=0.5)
+  fig = px.timeline(dataframe_serverless, x_start="queryStartDateTime", x_end="queryEndDateTime", y="date", color="endpointID", opacity=0.5)
   fig.update_yaxes(autorange="reversed")
   fig.update_layout(
                     xaxis = dict(
@@ -357,6 +357,10 @@ visualize_plot_warehouses(all_queries_grouped_autostop_with_dbu_classic)
 
 # COMMAND ----------
 
+display(all_queries_grouped_autostop_with_dbu_serverless)
+
+# COMMAND ----------
+
 visualize_plot_warehouses(all_queries_grouped_autostop_with_dbu_serverless)
 
 # COMMAND ----------
@@ -470,5 +474,3 @@ print(datetime.now())
 # MAGIC %md
 # MAGIC 
 # MAGIC # Known issues
-# MAGIC 
-# MAGIC - Visualization of queries than span multiple days does not work. E.g., StartTime = 2022-07-03T05:04:34.006+0000,  EndTime = 2022-07-04T06:19:04.000+0000
