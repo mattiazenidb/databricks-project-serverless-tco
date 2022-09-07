@@ -152,13 +152,36 @@ def split_date(start, stop, date, endpointID):
 
 # COMMAND ----------
 
-def visualize_plot(dataframe):
+def visualize_plot_warehouses(dataframe):
   new_dates = [
     elt for _, row in dataframe.select('queryStartDateTime', 'queryEndDateTimeWithAutostop', 'date', 'endpointID').toPandas().iterrows() for elt in split_date(row["queryStartDateTime"], row["queryEndDateTimeWithAutostop"], row["date"], row["endpointID"])
   ]      
-  dataframe_serverless = pd.DataFrame(new_dates, columns=["queryStartTimeDisplay", "queryEndDateTimeWithAutostopDisplay", "date", "endpointID"])
+  dataframe_serverless = pd.DataFrame(new_dates, columns=["queryStartDateTime", "queryEndDateTimeWithAutostop", "date", "endpointID"])
 
-  fig = px.timeline(dataframe_serverless, x_start="queryStartTimeDisplay", x_end="queryEndDateTimeWithAutostopDisplay", y="date", color="endpointID", opacity=0.5)
+  fig = px.timeline(dataframe_serverless, x_start="queryStartDateTime", x_end="queryEndDateTimeWithAutostop", y="date", color="endpointID", opacity=0.5)
+  fig.update_yaxes(autorange="reversed")
+  fig.update_layout(
+                    xaxis = dict(
+                        title = 'Timestamp', 
+                        tickformat = '%H:%M:%S',
+                    ),
+                    xaxis_range=['1970-01-01T00:00:00', '1970-01-01T23:59:59'],
+                    yaxis = dict(
+                        title = 'Date', 
+                        tickformat = '%m-%d',
+                    )
+  )
+  fig.show()
+
+# COMMAND ----------
+
+def visualize_plot_queries(dataframe):
+  new_dates = [
+    elt for _, row in dataframe.select('queryStartDateTime', 'queryEndDateTimeWithAutostop', 'date', 'endpointID').toPandas().iterrows() for elt in split_date(row["queryStartDateTime"], row["queryEndDateTimeWithAutostop"], row["date"], row["endpointID"])
+  ]      
+  dataframe_serverless = pd.DataFrame(new_dates, columns=["queryStartDateTime", "queryEndDateTimeWithAutostop", "date", "endpointID"])
+
+  fig = px.timeline(dataframe_serverless, x_start="queryStartDateTime", x_end="queryEndDateTimeWithAutostop", y="date", color="endpointID", opacity=0.5)
   fig.update_yaxes(autorange="reversed")
   fig.update_layout(
                     xaxis = dict(
@@ -259,8 +282,6 @@ all_queries_grouped_autostop_with_dbu_classic = all_warehouses_grouped.join(work
          .withColumn('totalDollarDBUs', col('totalDBUs') * costPerDbuClassic) \
          .withColumn('totalDollarVM', compute_vm_cost('clusterDriverNodeType', 'clusterWorkerNodeType', 'maxClusterWorkers', 'etlRegion') * col('nodeHours')) \
          .withColumn('totalDollar', col('totalDollarVM') + col('totalDollarDBUs')) \
-         .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-         .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
          .cache()
 
 # COMMAND ----------
@@ -292,9 +313,6 @@ all_queries_grouped_autostop_serverless = all_queries \
   ) \
   .withColumn('queryEndDateTimeWithAutostop', to_timestamp(unix_timestamp('queryEndDateTime') + autoStopSeconds)) \
   .withColumn("date", col('queryStartDateTime').cast('date')) \
-  .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-  .withColumn('queryEndTimeDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTime', 'HH:mm:ss').cast('string'))) \
-  .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
   .drop('interval_id')
 
 # COMMAND ----------
@@ -309,8 +327,6 @@ all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_
           ) \
           .withColumn('totalDBUs', (col('maxContainerPricingUnits') + col('maxClusterWorkers') * 2) / (60 * 60) * (unix_timestamp('queryEndDateTimeWithAutostop') - unix_timestamp('queryStartDateTime'))) \
           .withColumn('totalDollarDBUs', col('totalDBUs') * return_serverless_cost('etlRegion')) \
-          .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-          .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
           .cache()
 
 # COMMAND ----------
@@ -331,7 +347,7 @@ display(all_queries_grouped_autostop_with_dbu_classic)
 
 # COMMAND ----------
 
-visualize_plot(all_queries_grouped_autostop_with_dbu_classic)
+visualize_plot_warehouses(all_queries_grouped_autostop_with_dbu_classic)
 
 # COMMAND ----------
 
@@ -341,7 +357,7 @@ visualize_plot(all_queries_grouped_autostop_with_dbu_classic)
 
 # COMMAND ----------
 
-visualize_plot(all_queries_grouped_autostop_with_dbu_serverless)
+visualize_plot_warehouses(all_queries_grouped_autostop_with_dbu_serverless)
 
 # COMMAND ----------
 
@@ -366,7 +382,7 @@ dataframe_debug = all_queries \
 
 # COMMAND ----------
 
-visualize_plot(dataframe_debug)
+visualize_plot_queries(dataframe_debug)
 
 # COMMAND ----------
 
