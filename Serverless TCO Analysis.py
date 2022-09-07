@@ -26,6 +26,7 @@ costPerDbuClassic = float(dbutils.widgets.get('costPerDbuClassic'))
 vmDiscountPercentage = int(dbutils.widgets.get('vmDiscountPercentage'))
 serverlessDbuDiscountPercentage = int(dbutils.widgets.get('serverlessDbuDiscountPercentage'))
 autoStopSeconds = int(dbutils.widgets.get('autoStopSeconds'))
+serverlessDbuPriceIfMissingRegion = float(dbutils.widgets.get('serverlessDbuPriceIfMissingRegion'))
 
 # COMMAND ----------
 
@@ -137,8 +138,27 @@ def compute_vm_cost(clusterDriverNodeType, clusterWorkerNodeType, clusterWorkers
 
 # COMMAND ----------
 
+from datetime import timedelta
+
+def split_date(start, stop, date, endpointID):   
+                                                                                    
+    # Same day case                                                                                 
+    if start.date() == stop.date():  
+        return [(start.replace(year=1970, month=1, day=1), stop.replace(year=1970, month=1, day=1), date, endpointID)]                                                                      
+                                                                                                                                                                                      
+    # Several days split case                                                                       
+    stop_split = start.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    return [(start.replace(year=1970, month=1, day=1), stop_split.replace(year=1970, month=1, day=1, hour=23, minute=59, second=59, microsecond=999), date, endpointID)] + split_date(stop_split, stop, date + timedelta(days=1), endpointID)
+
+# COMMAND ----------
+
 def visualize_plot(dataframe):
-  fig = px.timeline(dataframe, x_start="queryStartTimeDisplay", x_end="queryEndDateTimeWithAutostopDisplay", y="date", color="endpointID", opacity=0.5)
+  new_dates = [
+    elt for _, row in dataframe.select('queryStartDateTime', 'queryEndDateTimeWithAutostop', 'date', 'endpointID').toPandas().iterrows() for elt in split_date(row["queryStartDateTime"], row["queryEndDateTimeWithAutostop"], row["date"], row["endpointID"])
+  ]      
+  dataframe_serverless = pd.DataFrame(new_dates, columns=["queryStartTimeDisplay", "queryEndDateTimeWithAutostopDisplay", "date", "endpointID"])
+
+  fig = px.timeline(dataframe_serverless, x_start="queryStartTimeDisplay", x_end="queryEndDateTimeWithAutostopDisplay", y="date", color="endpointID", opacity=0.5)
   fig.update_yaxes(autorange="reversed")
   fig.update_layout(
                     xaxis = dict(
@@ -307,15 +327,11 @@ all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_
 
 # COMMAND ----------
 
-dataframe_classic = all_queries_grouped_autostop_with_dbu_classic.select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId').toPandas()
-
-# COMMAND ----------
-
 display(all_queries_grouped_autostop_with_dbu_classic)
 
 # COMMAND ----------
 
-visualize_plot(dataframe_classic)
+visualize_plot(all_queries_grouped_autostop_with_dbu_classic)
 
 # COMMAND ----------
 
@@ -325,11 +341,7 @@ visualize_plot(dataframe_classic)
 
 # COMMAND ----------
 
-dataframe_serverless = all_queries_grouped_autostop_with_dbu_serverless.select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID').toPandas()
-
-# COMMAND ----------
-
-visualize_plot(dataframe_serverless)
+visualize_plot(all_queries_grouped_autostop_with_dbu_serverless)
 
 # COMMAND ----------
 
