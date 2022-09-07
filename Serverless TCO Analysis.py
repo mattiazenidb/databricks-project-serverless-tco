@@ -112,7 +112,7 @@ def return_serverless_cost(etlRegion):
   if etlRegion in serverless_dbu_prices:
     return serverless_dbu_prices[etlRegion] * (100-serverlessDbuDiscountPercentage)/100
   else:
-    return 0
+    return serverlessDbuPriceIfMissingRegion * (100-serverlessDbuDiscountPercentage)/100
 
 # COMMAND ----------
 
