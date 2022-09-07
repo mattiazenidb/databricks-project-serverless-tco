@@ -5,11 +5,6 @@
 
 # COMMAND ----------
 
-spark.conf.set('spark.sql.adaptive.enabled', True)
-spark.conf.set('spark.sql.adaptive.skewJoin.enabled', True)
-
-# COMMAND ----------
-
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from pyspark.sql.window import Window
@@ -286,9 +281,8 @@ all_queries_grouped_autostop_serverless = all_queries \
 
 all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_serverless.join(workloads, [workloads.date == all_queries_grouped_autostop_serverless.date, workloads.clusterId == all_queries_grouped_autostop_serverless.clusterID]) \
          .select(workloads.date, workloads.clusterId, workloads.containerPricingUnits, workloads.etlRegion, workloads.clusterWorkers, all_queries_grouped_autostop_serverless.endpointID, all_queries_grouped_autostop_serverless.queryStartDateTime, all_queries_grouped_autostop_serverless.queryEndDateTimeWithAutostop, all_queries_grouped_autostop_serverless.workspaceId) \
-         .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'etlRegion') \
+         .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'etlRegion', 'queryStartDateTime') \
          .agg(
-            max('queryStartDateTime').alias('queryStartDateTime'),
             max('queryEndDateTimeWithAutostop').alias('queryEndDateTimeWithAutostop'),
             max('containerPricingUnits').alias('maxContainerPricingUnits'),
             max('clusterWorkers').alias('maxClusterWorkers')
@@ -317,7 +311,7 @@ dataframe_classic = all_queries_grouped_autostop_with_dbu_classic.select('queryS
 
 # COMMAND ----------
 
-display(dataframe_classic)
+display(all_queries_grouped_autostop_with_dbu_classic)
 
 # COMMAND ----------
 
