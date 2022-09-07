@@ -177,10 +177,10 @@ def visualize_plot_warehouses(dataframe):
 
 def visualize_plot_queries(dataframe):
   new_dates = [
-    elt for _, row in dataframe.select('queryStartDateTime', 'queryEndDateTimeWithAutostop', 'date', 'endpointID').toPandas().iterrows() for elt in split_date(row["queryStartDateTime"], row["queryEndDateTimeWithAutostop"], row["date"], row["endpointID"])
+    elt for _, row in dataframe.withColumn("date", col('queryStartDateTime').cast('date')).select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId').toPandas().iterrows() for elt in split_date(row["queryStartDateTime"], row["queryEndDateTimeWithAutostop"], row["date"], row["endpointID"])
   ]      
   dataframe_serverless = pd.DataFrame(new_dates, columns=["queryStartDateTime", "queryEndDateTimeWithAutostop", "date", "endpointID"])
-
+  
   fig = px.timeline(dataframe_serverless, x_start="queryStartDateTime", x_end="queryEndDateTimeWithAutostop", y="date", color="endpointID", opacity=0.5)
   fig.update_yaxes(autorange="reversed")
   fig.update_layout(
@@ -371,18 +371,7 @@ display(all_queries)
 
 # COMMAND ----------
 
-
-dataframe_debug = all_queries \
-                     .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-                     .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTime', 'HH:mm:ss').cast('string'))) \
-                     .withColumn("date", col('queryStartDateTime').cast('date')) \
-                     .select('queryStartTimeDisplay', 'queryEndDateTimeWithAutostopDisplay', 'date', 'endpointID', 'clusterID', 'workspaceId') \
-                     .toPandas()
-
-
-# COMMAND ----------
-
-visualize_plot_queries(dataframe_debug)
+visualize_plot_queries(all_queries)
 
 # COMMAND ----------
 
