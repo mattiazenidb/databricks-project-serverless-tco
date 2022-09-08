@@ -255,29 +255,6 @@ all_queries = (thrift_statements
 
 # COMMAND ----------
 
-from pyspark.sql.types import StructType,StructField, StringType, IntegerType, TimestampType
-data2 = [("0519-103345-p2mj76za","2fb34165725b8ef1","388811714323854","2022-05-20T00:03:05.550+0000","2022-05-20T10:04:47.322+0000","2022-05-20"),
-    ("0520-100641-naznyv7m","2fb34165725b8ef1","388811714323854","2022-05-20T10:13:08.347+0000","2022-05-23T08:37:11.772+0000","2022-05-20"),
-    ("0521-093642-okhtp36o","2fb34165725b8ef1","388811714323854","2022-05-22T09:13:08.577+0000","2022-05-23T09:26:29.658+0000","2022-05-20")
-  ]
-
-schema = StructType([ \
-    StructField("clusterID",StringType(),True), \
-    StructField("endpointID",StringType(),True), \
-    StructField("workspaceID",StringType(),True), \
-    StructField("queryStartDateTime", StringType(), True), \
-    StructField("queryEndDateTime", StringType(), True), \
-    StructField("date", StringType(), True) \
-  ])
- 
-all_warehouses_grouped = spark.createDataFrame(data=data2,schema=schema) \
-  .withColumn("queryStartDateTime", col('queryStartDateTime').cast('timestamp')) \
-  .withColumn("queryEndDateTime", col('queryEndDateTime').cast('timestamp')) \
-  .withColumn("startDate", col('queryStartDateTime').cast('date')) \
-  .withColumn("endDate", col('queryEndDateTime').cast('date'))
-
-# COMMAND ----------
-
 all_warehouses_grouped = all_queries \
   .groupBy('clusterID', 'endpointID', 'workspaceId') \
   .agg(
