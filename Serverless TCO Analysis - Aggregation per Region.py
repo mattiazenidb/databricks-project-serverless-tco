@@ -5,11 +5,6 @@
 
 # COMMAND ----------
 
-spark.conf.set('spark.sql.adaptive.enabled', True)
-spark.conf.set('spark.sql.adaptive.skewJoin.enabled', True)
-
-# COMMAND ----------
-
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from pyspark.sql.window import Window
@@ -30,6 +25,7 @@ costPerDbuClassic = float(dbutils.widgets.get('costPerDbuClassic'))
 vmDiscountPercentage = int(dbutils.widgets.get('vmDiscountPercentage'))
 serverlessDbuDiscountPercentage = int(dbutils.widgets.get('serverlessDbuDiscountPercentage'))
 autoStopSeconds = int(dbutils.widgets.get('autoStopSeconds'))
+serverlessDbuPriceIfMissingRegion = float(dbutils.widgets.get('serverlessDbuPriceIfMissingRegion'))
 region = dbutils.widgets.get('region')
 topXCustomers = int(dbutils.widgets.get('topXCustomers'))
 
@@ -130,12 +126,14 @@ vm_prices['ap-southeast-2']['i3.16xlarge'] = 5.984
 
 # COMMAND ----------
 
+#maybe replace with broadcast join?
+
 @udf('double')
 def return_serverless_cost(etlRegion):
   if etlRegion in serverless_dbu_prices:
     return serverless_dbu_prices[etlRegion] * (100-serverlessDbuDiscountPercentage)/100
   else:
-    return 0
+    return serverlessDbuPriceIfMissingRegion * (100-serverlessDbuDiscountPercentage)/100
 
 # COMMAND ----------
 
@@ -161,8 +159,50 @@ def compute_vm_cost(clusterDriverNodeType, clusterWorkerNodeType, clusterWorkers
 
 # COMMAND ----------
 
-def visualize_plot(dataframe):
-  fig = px.timeline(dataframe, x_start="queryStartTimeDisplay", x_end="queryEndDateTimeWithAutostopDisplay", y="date", color="endpointID", opacity=0.5)
+from datetime import timedelta
+
+def split_date(start, stop, date, endpointID):   
+                                                                                    
+    # Same day case
+    if start.date() == stop.date():  
+        return [(start.replace(year=1970, month=1, day=1), stop.replace(year=1970, month=1, day=1), date, endpointID)]                                                                      
+                                                                                                                                                                                      
+    # Several days split case
+    stop_split = start.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    return [(start.replace(year=1970, month=1, day=1), stop_split.replace(year=1970, month=1, day=1, hour=23, minute=59, second=59, microsecond=999), date, endpointID)] + split_date(stop_split, stop, date + timedelta(days=1), endpointID)
+
+# COMMAND ----------
+
+def visualize_plot_warehouses(dataframe):
+  new_dates = [
+    elt for _, row in dataframe.select('queryStartDateTime', 'queryEndDateTimeWithAutostop', 'date', 'endpointID').toPandas().iterrows() for elt in split_date(row["queryStartDateTime"], row["queryEndDateTimeWithAutostop"], row["date"], row["endpointID"])
+  ]      
+  dataframe_serverless = pd.DataFrame(new_dates, columns=["queryStartDateTime", "queryEndDateTimeWithAutostop", "date", "endpointID"])
+
+  fig = px.timeline(dataframe_serverless, x_start="queryStartDateTime", x_end="queryEndDateTimeWithAutostop", y="date", color="endpointID", opacity=0.5)
+  fig.update_yaxes(autorange="reversed")
+  fig.update_layout(
+                    xaxis = dict(
+                        title = 'Timestamp', 
+                        tickformat = '%H:%M:%S',
+                    ),
+                    xaxis_range=['1970-01-01T00:00:00', '1970-01-01T23:59:59'],
+                    yaxis = dict(
+                        title = 'Date', 
+                        tickformat = '%m-%d',
+                    )
+  )
+  fig.show()
+
+# COMMAND ----------
+
+def visualize_plot_queries(dataframe):
+  new_dates = [
+    elt for _, row in dataframe.withColumn("date", col('queryStartDateTime').cast('date')).select('queryStartDateTime', 'queryEndDateTime', 'date', 'endpointID', 'clusterID', 'workspaceId').toPandas().iterrows() for elt in split_date(row["queryStartDateTime"], row["queryEndDateTime"], row["date"], row["endpointID"])
+  ]      
+  dataframe_serverless = pd.DataFrame(new_dates, columns=["queryStartDateTime", "queryEndDateTime", "date", "endpointID"])
+  
+  fig = px.timeline(dataframe_serverless, x_start="queryStartDateTime", x_end="queryEndDateTime", y="date", color="endpointID", opacity=0.5)
   fig.update_yaxes(autorange="reversed")
   fig.update_layout(
                     xaxis = dict(
@@ -258,7 +298,15 @@ all_warehouses_grouped = all_queries \
     min('queryStartDateTime').alias('queryStartDateTime'),
     max('queryEndDateTime').alias('queryEndDateTime')
   ) \
-  .withColumn("date", col('queryStartDateTime').cast('date')) \
+  .withColumn("startDate", col('queryStartDateTime').cast('date')) \
+  .withColumn("endDate", col('queryEndDateTime').cast('date')) \
+  .withColumn('days', expr('sequence(startDate, endDate, interval 1 day)')) \
+  .withColumn('date', explode('days')) \
+  .withColumn('numberOfDays', size("days")) \
+  .withColumn('index', row_number().over(Window.partitionBy('clusterID').orderBy('clusterID'))) \
+  .withColumn('queryStartDateTime', when((col('startDate') == col('date')) & (col('numberOfDays') == 1), col('queryStartDateTime')).otherwise(when((col('startDate') == col('date')) & (col('numberOfDays') != 1), col('queryStartDateTime')).otherwise(date_add(from_unixtime(round(unix_timestamp('queryStartDateTime') / lit(86400)) * lit(86400)), col('index') - 1)))) \
+  .withColumn('queryEndDateTime', when((col('startDate') == col('date')) & (col('numberOfDays') == 1), col('queryEndDateTime')).otherwise(when((col('endDate') == col('date')) & (col('numberOfDays') != 1), col('queryEndDateTime')).otherwise(from_unixtime((round(unix_timestamp('queryStartDateTime') / lit(86400)) * lit(86400)) + lit(86400) - lit(1)))).cast('timestamp')) \
+  .drop('days', 'numberOfDays', 'index', 'startDate', 'endDate') \
   .orderBy('queryStartDateTime')
 
 # COMMAND ----------
@@ -279,8 +327,6 @@ all_queries_grouped_autostop_with_dbu_classic = all_warehouses_grouped.join(work
          .withColumn('totalDollarDBUs', col('totalDBUs') * costPerDbuClassic) \
          .withColumn('totalDollarVM', compute_vm_cost('clusterDriverNodeType', 'clusterWorkerNodeType', 'maxClusterWorkers', 'etlRegion') * col('nodeHours')) \
          .withColumn('totalDollar', col('totalDollarVM') + col('totalDollarDBUs')) \
-         .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-         .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
          .cache()
 
 # COMMAND ----------
@@ -314,25 +360,21 @@ all_queries_grouped_autostop_serverless = all_queries \
   .withColumn('queryEndDateTimeWithAutostop', to_timestamp(unix_timestamp('queryEndDateTime') + autoStopSeconds)) \
   .withColumn("date", col('queryStartDateTime').cast('date')) \
   .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-  .withColumn('queryEndTimeDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTime', 'HH:mm:ss').cast('string'))) \
-  .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
   .drop('interval_id')
 
 # COMMAND ----------
 
 all_queries_grouped_autostop_with_dbu_serverless = all_queries_grouped_autostop_serverless.join(workloads, [workloads.date == all_queries_grouped_autostop_serverless.date, workloads.clusterId == all_queries_grouped_autostop_serverless.clusterID]) \
          .select(workloads.date, workloads.clusterId, workloads.containerPricingUnits, workloads.etlRegion, workloads.clusterWorkers, all_queries_grouped_autostop_serverless.endpointID, all_queries_grouped_autostop_serverless.queryStartDateTime, all_queries_grouped_autostop_serverless.queryEndDateTimeWithAutostop, all_queries_grouped_autostop_serverless.workspaceId, all_queries_grouped_autostop_serverless.canonicalCustomerName) \
-         .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'canonicalCustomerName', 'etlRegion') \
+         .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'canonicalCustomerName', 'etlRegion', all_queries_grouped_autostop_serverless.queryStartDateTime) \
          .agg(
-            max('queryStartDateTime').alias('queryStartDateTime'),
+            max(all_queries_grouped_autostop_serverless.queryStartDateTime).alias('queryStartDateTime'),
             max('queryEndDateTimeWithAutostop').alias('queryEndDateTimeWithAutostop'),
             max('containerPricingUnits').alias('maxContainerPricingUnits'),
             max('clusterWorkers').alias('maxClusterWorkers')
           ) \
-          .withColumn('totalDBUs', (col('maxContainerPricingUnits') + col('maxClusterWorkers') * 2) / (60 * 60) * (unix_timestamp('queryEndDateTimeWithAutostop') - unix_timestamp('queryStartDateTime'))) \
+          .withColumn('totalDBUs', (col('maxContainerPricingUnits') + col('maxClusterWorkers') * 2) / (60 * 60) * (unix_timestamp('queryEndDateTimeWithAutostop') - unix_timestamp(all_queries_grouped_autostop_serverless.queryStartDateTime))) \
           .withColumn('totalDollarDBUs', col('totalDBUs') * return_serverless_cost('etlRegion')) \
-          .withColumn('queryStartTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
-          .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
           .cache()
 
 # COMMAND ----------
@@ -385,7 +427,7 @@ display(results_serverless)
 
 # COMMAND ----------
 
-results = results_serverless.join(results_classic, results_classic.canonicalCustomerName == results_serverless.canonicalCustomerName).drop(results_classic.canonicalCustomerName).withColumn('accountTeamTCOVariation', col('totalDollarServerless') - col('totalDollarDBUs')).withColumn('accountTCOVariation', col('totalDollarClassic') - col('totalDollarServerless')).withColumn('accountTCOVariationPercentage', col('accountTCOVariation') / col('totalDollarClassic') * 100)
+results = results_serverless.join(results_classic, results_classic.canonicalCustomerName == results_serverless.canonicalCustomerName).drop(results_classic.canonicalCustomerName).withColumn('accountTeamTCOVariation', col('totalDollarServerless') - col('totalDollarDBUs')).withColumn('accountTCOVariation', col('totalDollarServerless') - col('totalDollarClassic')).withColumn('accountTCOVariationPercentage', col('accountTCOVariation') / col('totalDollarClassic') * 100)
 
 # COMMAND ----------
 
@@ -408,5 +450,4 @@ print(datetime.now())
 # MAGIC - Same colors per endpoint/workspace across graphs?
 # MAGIC - What happens if a region is not available with serverless?
 # MAGIC - Exclude serverless SQL queries
-# MAGIC - Same clusterID on different days? 0101-011330-4vkdywl0 2022-01-01
 # MAGIC - Performance Optimization (disk spill)
