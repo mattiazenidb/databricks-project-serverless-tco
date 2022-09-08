@@ -142,11 +142,11 @@ from datetime import timedelta
 
 def split_date(start, stop, date, endpointID):   
                                                                                     
-    # Same day case                                                                                 
+    # Same day case
     if start.date() == stop.date():  
         return [(start.replace(year=1970, month=1, day=1), stop.replace(year=1970, month=1, day=1), date, endpointID)]                                                                      
                                                                                                                                                                                       
-    # Several days split case                                                                       
+    # Several days split case
     stop_split = start.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     return [(start.replace(year=1970, month=1, day=1), stop_split.replace(year=1970, month=1, day=1, hour=23, minute=59, second=59, microsecond=999), date, endpointID)] + split_date(stop_split, stop, date + timedelta(days=1), endpointID)
 
@@ -255,13 +255,44 @@ all_queries = (thrift_statements
 
 # COMMAND ----------
 
+from pyspark.sql.types import StructType,StructField, StringType, IntegerType, TimestampType
+data2 = [("0519-103345-p2mj76za","2fb34165725b8ef1","388811714323854","2022-05-20T00:03:05.550+0000","2022-05-20T10:04:47.322+0000","2022-05-20"),
+    ("0520-100641-naznyv7m","2fb34165725b8ef1","388811714323854","2022-05-20T10:13:08.347+0000","2022-05-23T08:37:11.772+0000","2022-05-20"),
+    ("0521-093642-okhtp36o","2fb34165725b8ef1","388811714323854","2022-05-22T09:13:08.577+0000","2022-05-23T09:26:29.658+0000","2022-05-20")
+  ]
+
+schema = StructType([ \
+    StructField("clusterID",StringType(),True), \
+    StructField("endpointID",StringType(),True), \
+    StructField("workspaceID",StringType(),True), \
+    StructField("queryStartDateTime", StringType(), True), \
+    StructField("queryEndDateTime", StringType(), True), \
+    StructField("date", StringType(), True) \
+  ])
+ 
+all_warehouses_grouped = spark.createDataFrame(data=data2,schema=schema) \
+  .withColumn("queryStartDateTime", col('queryStartDateTime').cast('timestamp')) \
+  .withColumn("queryEndDateTime", col('queryEndDateTime').cast('timestamp')) \
+  .withColumn("startDate", col('queryStartDateTime').cast('date')) \
+  .withColumn("endDate", col('queryEndDateTime').cast('date'))
+
+# COMMAND ----------
+
 all_warehouses_grouped = all_queries \
   .groupBy('clusterID', 'endpointID', 'workspaceId') \
   .agg(
     min('queryStartDateTime').alias('queryStartDateTime'),
     max('queryEndDateTime').alias('queryEndDateTime')
   ) \
-  .withColumn("date", col('queryStartDateTime').cast('date')) \
+  .withColumn("startDate", col('queryStartDateTime').cast('date')) \
+  .withColumn("endDate", col('queryEndDateTime').cast('date')) \
+  .withColumn('days', expr('sequence(startDate, endDate, interval 1 day)')) \
+  .withColumn('date', explode('days')) \
+  .withColumn('numberOfDays', size("days")) \
+  .withColumn('index', row_number().over(Window.partitionBy('clusterID').orderBy('clusterID'))) \
+  .withColumn('queryStartDateTime', when((col('startDate') == col('date')) & (col('numberOfDays') == 1), col('queryStartDateTime')).otherwise(when((col('startDate') == col('date')) & (col('numberOfDays') != 1), col('queryStartDateTime')).otherwise(date_add(from_unixtime(round(unix_timestamp('queryStartDateTime') / lit(86400)) * lit(86400)), col('index') - 1)))) \
+  .withColumn('queryEndDateTime', when((col('startDate') == col('date')) & (col('numberOfDays') == 1), col('queryEndDateTime')).otherwise(when((col('endDate') == col('date')) & (col('numberOfDays') != 1), col('queryEndDateTime')).otherwise(from_unixtime((round(unix_timestamp('queryStartDateTime') / lit(86400)) * lit(86400)) + lit(86400) - lit(1)))).cast('timestamp')) \
+  .drop('days', 'numberOfDays', 'index', 'startDate', 'endDate') \
   .orderBy('queryStartDateTime')
 
 # COMMAND ----------
@@ -371,11 +402,11 @@ visualize_plot_warehouses(all_queries_grouped_autostop_with_dbu_serverless)
 
 # COMMAND ----------
 
-display(all_queries)
+#display(all_queries)
 
 # COMMAND ----------
 
-visualize_plot_queries(all_queries)
+#visualize_plot_queries(all_queries)
 
 # COMMAND ----------
 
@@ -463,9 +494,7 @@ print(datetime.now())
 # MAGIC - Add autoscaling (I believe it is already added for Classic, need to add it for Serverless)
 # MAGIC - Understand why NoneType can be present in compute_vm_cost
 # MAGIC - Is cluster restart at midnight an issue?
-# MAGIC - What happens if a region is not available with serverless?
 # MAGIC - Exclude serverless SQL queries
-# MAGIC - Same clusterID on different days? 0101-011330-4vkdywl0 2022-01-01
 # MAGIC - Same colors per endpoint/workspace across graphs?
 # MAGIC - Performance Optimization (disk spill)
 
