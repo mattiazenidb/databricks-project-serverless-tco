@@ -153,12 +153,15 @@ def split_date(start, stop, date, endpointID):
 # COMMAND ----------
 
 def visualize_plot_warehouses(dataframe):
-  new_dates = [
-    elt for _, row in dataframe.select('queryStartDateTime', 'queryEndDateTimeWithAutostop', 'date', 'endpointID').toPandas().iterrows() for elt in split_date(row["queryStartDateTime"], row["queryEndDateTimeWithAutostop"], row["date"], row["endpointID"])
-  ]      
-  dataframe_serverless = pd.DataFrame(new_dates, columns=["queryStartDateTime", "queryEndDateTimeWithAutostop", "date", "endpointID"])
-
-  fig = px.timeline(dataframe_serverless, x_start="queryStartDateTime", x_end="queryEndDateTimeWithAutostop", y="date", color="endpointID", opacity=0.5)
+  
+  dataframe_visualize = dataframe \
+         .withColumn('queryStartDateTimeDisplay', concat(lit('1970-01-01T'), date_format('queryStartDateTime', 'HH:mm:ss').cast('string'))) \
+         .withColumn('queryEndDateTimeWithAutostopDisplay', concat(lit('1970-01-01T'), date_format('queryEndDateTimeWithAutostop', 'HH:mm:ss').cast('string'))) \
+         .toPandas()
+  
+  display(dataframe_visualize)
+  
+  fig = px.timeline(dataframe_visualize, x_start="queryStartDateTimeDisplay", x_end="queryEndDateTimeWithAutostopDisplay", y="date", color="endpointID", opacity=0.5)
   fig.update_yaxes(autorange="reversed")
   fig.update_layout(
                     xaxis = dict(
@@ -267,7 +270,7 @@ all_warehouses_grouped = all_queries \
   .withColumn('date', explode('days')) \
   .withColumn('numberOfDays', size("days")) \
   .withColumn('index', row_number().over(Window.partitionBy('clusterID').orderBy('clusterID'))) \
-  .withColumn('queryStartDateTime', when((col('startDate') == col('date')) & (col('numberOfDays') == 1), col('queryStartDateTime')).otherwise(when((col('startDate') == col('date')) & (col('numberOfDays') != 1), col('queryStartDateTime')).otherwise(date_add(from_unixtime(round(unix_timestamp('queryStartDateTime') / lit(86400)) * lit(86400)), col('index') - 1)))) \
+  .withColumn('queryStartDateTime', when((col('startDate') == col('date')) & (col('numberOfDays') == 1), col('queryStartDateTime')).otherwise(when((col('startDate') == col('date')) & (col('numberOfDays') != 1), col('queryStartDateTime')).otherwise(to_timestamp(col('days')[col('index') - lit(1)])))) \
   .withColumn('queryEndDateTime', when((col('startDate') == col('date')) & (col('numberOfDays') == 1), col('queryEndDateTime')).otherwise(when((col('endDate') == col('date')) & (col('numberOfDays') != 1), col('queryEndDateTime')).otherwise(from_unixtime((round(unix_timestamp('queryStartDateTime') / lit(86400)) * lit(86400)) + lit(86400) - lit(1)))).cast('timestamp')) \
   .drop('days', 'numberOfDays', 'index', 'startDate', 'endDate') \
   .orderBy('queryStartDateTime')
@@ -280,16 +283,24 @@ all_queries_grouped_autostop_with_dbu_classic = all_warehouses_grouped.join(work
          .groupBy('date', 'clusterID', 'endpointID', 'workspaceId', 'clusterDriverNodeType', 'clusterWorkerNodeType', 'etlRegion') \
          .agg(
             max('queryStartDateTime').alias('queryStartDateTime'),
-            max('queryEndDateTime').alias('queryEndDateTime'),
             max('queryEndDateTimeWithAutostop').alias('queryEndDateTimeWithAutostop'),
-            max('nodeHours').alias('nodeHours'),
             max('containerPricingUnits').alias('maxContainerPricingUnits'),
             max('clusterWorkers').alias('maxClusterWorkers')
           ) \
+         .withColumn("startDate", col('queryStartDateTime').cast('date')) \
+         .withColumn("endDate", col('queryEndDateTimeWithAutostop').cast('date')) \
+         .withColumn('days', expr('sequence(startDate, endDate, interval 1 day)')) \
+         .withColumn('date', explode('days')) \
+         .withColumn('numberOfDays', size("days")) \
+         .withColumn('index', row_number().over(Window.partitionBy('clusterID').orderBy('clusterID'))) \
+         .withColumn('queryStartDateTime', when((col('startDate') == col('date')) & (col('numberOfDays') == 1), col('queryStartDateTime')).otherwise(when((col('startDate') == col('date')) & (col('numberOfDays') != 1), col('queryStartDateTime')).otherwise(to_timestamp(col('days')[col('index') - lit(1)])))) \
+         .withColumn('queryEndDateTimeWithAutostop', when((col('startDate') == col('date')) & (col('numberOfDays') == 1), col('queryEndDateTimeWithAutostop')).otherwise(when((col('endDate') == col('date')) & (col('numberOfDays') != 1), col('queryEndDateTimeWithAutostop')).otherwise(from_unixtime((round(unix_timestamp('queryEndDateTimeWithAutostop') / lit(86400)) * lit(86400)) + lit(86400) - lit(1)))).cast('timestamp')) \
+         .withColumn('nodeHours', (unix_timestamp('queryEndDateTimeWithAutostop') - unix_timestamp('queryStartDateTime')) / 60 / 60) \
          .withColumn('totalDBUs', (col('maxContainerPricingUnits') + col('maxClusterWorkers') * 2) * col('nodeHours')) \
          .withColumn('totalDollarDBUs', col('totalDBUs') * costPerDbuClassic) \
          .withColumn('totalDollarVM', compute_vm_cost('clusterDriverNodeType', 'clusterWorkerNodeType', 'maxClusterWorkers', 'etlRegion') * col('nodeHours')) \
          .withColumn('totalDollar', col('totalDollarVM') + col('totalDollarDBUs')) \
+         .drop('days', 'numberOfDays', 'index', 'startDate', 'endDate') \
          .cache()
 
 # COMMAND ----------
@@ -474,6 +485,7 @@ print(datetime.now())
 # MAGIC - Exclude serverless SQL queries
 # MAGIC - Same colors per endpoint/workspace across graphs?
 # MAGIC - Performance Optimization (disk spill)
+# MAGIC - Add .999 to every time when splitting rows at midnight
 
 # COMMAND ----------
 
